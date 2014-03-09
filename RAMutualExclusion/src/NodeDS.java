@@ -25,11 +25,18 @@ public class NodeDS {
 	private int minDelay;
 	private int maxDelay;
 	private int granted;
+	private int clientTimeStamp;
 	private int finishedNodes;
+	private int totalMessages;
+	private int messagesPerRound[] = new int[40];
+	private double timePerRound[] = new double[40];
+	private double startTime;
+	private double endTime;
 	private ServerSocket serverSocket = null;
 	private Socket clientSocket = null;
 	private Map<Integer,String[]> nodes = null;
 	boolean requestGranted[];
+	private static final Object tmLock = new Object();
 	private static final Object rqLock = new Object();
 	private static final Object srqLock = new Object();
 	private static final Object rgLock = new Object();
@@ -41,6 +48,8 @@ public class NodeDS {
 	private static final Object ndsLock = new Object();
 	private static final Object mcLock = new Object();
 	private static final Object grLock = new Object();
+	private static final Object tprLock = new Object();
+	private static final Object mprLock = new Object();
 	private final Object grfLock = new Object();
 	private static final Object fnLock = new Object();
 	private static final Object entCsLock = new Object();
@@ -59,7 +68,9 @@ public class NodeDS {
 		timeStamp = 0;
 		granted = 0;
 		finishedNodes = 0;
+		totalMessages = 0;
 		//serverTimeStamp = 0;
+		clientTimeStamp = 0;
 		nodes = new HashMap<Integer,String[]>();
 		requestQueue = new HashMap<Integer,Integer>();
 		readConfig();
@@ -72,10 +83,51 @@ public class NodeDS {
 		enterCS = false;
 	}
 	
+	public int getTotalMessages()
+	{
+		synchronized(tmLock)
+		{
+			return totalMessages;
+		}
+	}
+	
+	public void setTotalMessages(int _totalMessages)
+	{
+		synchronized(tmLock)
+		{
+			totalMessages = _totalMessages;
+		}
+	}
+	
 	public Object getGRFLock()
 	{
 		return grfLock;
 	}
+	
+	public int[] getMessagesPerRound()
+	{
+		synchronized(mprLock)
+		{
+			return messagesPerRound;
+		}
+	}
+	
+	public void setMessagesPerRound(int index,int value)
+	{
+		synchronized(mprLock)
+		{
+			messagesPerRound[index] = value;
+		}
+	}
+	
+	public double[] getTimePerRound()
+	{
+		synchronized(tprLock)
+		{
+			return timePerRound;
+		}
+	}
+	
 	public int getGranted()
 	{
 		synchronized(grLock)
@@ -357,99 +409,6 @@ public class NodeDS {
 		
 	}
 	
-/*	public static void startServer()
-	{
-		String message = null;
-		try
-		{
-			//Create a server socket at port 5000
-			System.out.println("Server started on: "+Integer.parseInt(this.getNodes().get(this.getNodeId())[1]));
-			ServerSocket serverSock = new ServerSocket(Integer.parseInt(this.getNodes().get(this.getNodeId())[1]));
-			serverTimeStamp++;
-			System.out.println("Server timestamp: "+serverTimeStamp);
-			//Server goes into a permanent loop accepting connections from clients			
-			while(true)
-			{
-				//Listens for a connection to be made to this socket and accepts it
-				//The method blocks until a connection is made
-				Socket sock = serverSock.accept();
-				serverTimeStamp++;
-				System.out.println("Server timestamp: "+serverTimeStamp);
-				BufferedReader reader = new BufferedReader(new InputStreamReader(sock.getInputStream()));
-				message = reader.readLine();
-				serverTimeStamp++;
-				System.out.println("Server timestamp: "+serverTimeStamp);
-				String messageParts[] = message.split(":");
-				serverTimeStamp = max(serverTimeStamp,Integer.parseInt(messageParts[0]));
-				System.out.println("Client says: " + message);
-				System.out.println("Server timestamp: "+serverTimeStamp);
-				boolean sendReply = false;
-				if(messageParts[2]=="request")
-				{
-					if(!getRequestingCS() && !getExecutingCS())
-					{
-						sendReply = true;
-					}
-					else if(!getExecutingCS())
-					{
-						Integer requestTime = null;
-						Integer nodeTime = null;
-						getRequestQueue().put(Integer.parseInt(messageParts[1]),Integer.parseInt(messageParts[0]));
-						serverTimeStamp++;
-						System.out.println("Server timestamp: "+serverTimeStamp);
-						requestTime = Integer.parseInt(messageParts[0]);
-						for(Integer key:getRequestQueue().keySet())
-						{	
-							if(key == this.nodeId)
-							 nodeTime = getRequestQueue().get(key);
-						}
-						if(requestTime<nodeTime)
-							sendReply = true;
-						else if(requestTime==nodeTime)
-						{
-							if(Integer.parseInt(messageParts[1])<this.nodeId)
-								sendReply = true;
-						}
-					}
-					if(sendReply)
-					{
-						serverTimeStamp++;
-						System.out.println("Server timestamp: "+serverTimeStamp);
-						PrintWriter writer = null;
-						try {
-							writer = new PrintWriter(sock.getOutputStream());
-						} catch (IOException e) {
-							// TODO Auto-generated catch block
-							e.printStackTrace();
-						}
-						writer.println(serverTimeStamp+":"+this.getNodeId()+":granted");
-						writer.close();
-					}
-				}
-				else if(messageParts[2]=="enterCS")
-				{	
-					try {
-					    PrintWriter out = new PrintWriter(new BufferedWriter(new FileWriter("dataCollect.txt", true)));
-					    out.println(message+"\t Entering");
-					    out.println(message+"\t Leaving");
-					    out.close();
-					    serverTimeStamp++;
-					    System.out.println("Server timestamp: "+serverTimeStamp);
-					} catch (IOException e) {
-					    //exception handling left as an exercise for the reader
-					}
-				}
-				sock.close();
-			}
-		}
-		catch(IOException ex)
-		{
-			ex.printStackTrace();
-		}
-	}
-*/	
-	
-	
 	public int max(int x, int y)
 	{
 		if(x>y)
@@ -458,16 +417,30 @@ public class NodeDS {
 			return y;
 	}
 	
-	public void enterCriticalSection()
+	public void increaseTimeStamp()
 	{
-		int clientTimeStamp;
 		clientTimeStamp = this.getTimeStamp();
 		clientTimeStamp++;
 		this.setTimeStamp(clientTimeStamp);
-		System.out.println("Client timestamp: "+clientTimeStamp);
+	}
+	
+	public void enterCriticalSection()
+	{
+		
+		increaseTimeStamp();
+	
 		PrintWriter writer = null;
 		try {
-			clientSocket = new Socket(this.getNodes().get(0)[0],Integer.parseInt(this.getNodes().get(0)[1]));
+			if(this.getNodeId()%2==0)
+			 {
+				clientSocket = new Socket(this.getNodes().get(2)[0],Integer.parseInt(this.getNodes().get(2)[1]));
+				System.out.println("Connecting to Server on host: "+this.getNodes().get(2)[0]+" port: "+Integer.parseInt(this.getNodes().get(2)[1]));
+			 }
+			else
+			{
+				clientSocket = new Socket(this.getNodes().get(1)[0],Integer.parseInt(this.getNodes().get(1)[1]));
+				System.out.println("Connecting to Server on host: "+this.getNodes().get(1)[0]+" port: "+Integer.parseInt(this.getNodes().get(1)[1]));
+			}
 		} catch (NumberFormatException e) {
 			// TODO Auto-generated catch block
 			e.printStackTrace();
@@ -478,39 +451,38 @@ public class NodeDS {
 			// TODO Auto-generated catch block
 			e.printStackTrace();
 		}
-		System.out.println("Connecting to Server on host: "+this.getNodes().get(0)[0]+" port: "+Integer.parseInt(this.getNodes().get(0)[1]));
+		
 		try {
 			writer = new PrintWriter(clientSocket.getOutputStream());
 		} catch (IOException e) {
 			// TODO Auto-generated catch block
 			e.printStackTrace();
 		}
+		
+		increaseTimeStamp();
+		System.out.println("Client timestamp: Message "+clientTimeStamp+":"+this.getNodeId()+":enterCS");
 		writer.println(clientTimeStamp+":"+this.getNodeId()+":enterCS");
-		clientTimeStamp = this.getTimeStamp();
-		clientTimeStamp++;
-		this.setTimeStamp(clientTimeStamp);
-		System.out.println("Client timestamp: "+clientTimeStamp);
+		
 		writer.close();
-		int cseCount = this.getCSEntryCount();
+		
+		increaseTimeStamp();
+		int cseCount = this.getCSEntryCount();	
 		cseCount++;
 		this.setCSEntryCount(cseCount);
+		System.out.println("Client timestamp: cse count:"+cseCount);
+		
 		try {
 			clientSocket.close();
 		} catch (IOException e) {
 			// TODO Auto-generated catch block
 			e.printStackTrace();
 		}
-		clientTimeStamp = this.getTimeStamp();
-		clientTimeStamp++;
-		this.setTimeStamp(clientTimeStamp);
-		System.out.println("Client timestamp: "+clientTimeStamp);
 	}
-   public void grantRequests()
+	
+   public void grantRequests(int round)
    {
-	   int serverTimeStamp = this.getTimeStamp();
 	   Integer requestTime = null;
 	   Integer nodeTime = null;
-		//requestTime = Integer.parseInt(messageParts[0]);
 	   System.out.println("Request queue size: "+this.getRequestQueue().size());
 	   if(this.getRequestQueue().size()>0)
 	   {
@@ -518,11 +490,10 @@ public class NodeDS {
 			{	
 				if(key == this.getNodeId())
 				{
+					increaseTimeStamp();
+					System.out.println("Client timestamp: "+this.getTimeStamp()+" This Node Time: "+nodeTime);
 					nodeTime = this.getRequestQueue().get(key);
-					serverTimeStamp = this.getTimeStamp();
-					serverTimeStamp++;
-					this.setTimeStamp(serverTimeStamp);
-					System.out.println("Server timestamp: "+serverTimeStamp+" This Node Time: "+nodeTime);
+					
 				}
 			}
 			if(nodeTime!=null)
@@ -532,23 +503,17 @@ public class NodeDS {
 					System.out.println("Request Node: "+key+" Time: "+this.getRequestQueue().get(key));
 					if(nodeTime>this.getRequestQueue().get(key))
 					{
+						increaseTimeStamp();
+						System.out.println("Client timestamp: "+getTimeStamp()+" Adding"+key+"to grant request queue");
 						this.getGrantRequestQueue().add(key);
-						//this.getRequestQueue().remove(key);
-						serverTimeStamp = this.getTimeStamp();
-						serverTimeStamp++;
-						this.setTimeStamp(serverTimeStamp);
-						System.out.println("Server timestamp: "+serverTimeStamp);
 					}
 					else if(nodeTime==this.getRequestQueue().get(key))
 					{
 						if(key<this.getNodeId())
 						{
+							increaseTimeStamp();
+							System.out.println("Client timestamp: "+getTimeStamp()+" Adding"+key+"to grant request queue");
 							this.getGrantRequestQueue().add(key);
-							//this.getRequestQueue().remove(key);
-							 serverTimeStamp = this.getTimeStamp();
-						     serverTimeStamp++;
-						     this.setTimeStamp(serverTimeStamp);
-							 System.out.println("Server timestamp: "+serverTimeStamp);
 						}
 					}
 				}
@@ -557,23 +522,25 @@ public class NodeDS {
 			{
 				for(Integer key:this.getRequestQueue().keySet())
 				{
+					increaseTimeStamp();
+					System.out.println("Client timestamp: "+getTimeStamp()+" Adding"+key+"to grant request queue");
 					this.getGrantRequestQueue().add(key);
-					//this.getRequestQueue().remove(key);
-					serverTimeStamp = this.getTimeStamp();
-				    serverTimeStamp++;
-				    this.setTimeStamp(serverTimeStamp);
-					System.out.println("Server timestamp: "+serverTimeStamp);
 				}
 			}
 			if(this.getGrantRequestQueue().size() > 0)
 			{
-				System.out.println("Server timestamp: "+serverTimeStamp+" Granted Request queue size: "+this.getGrantRequestQueue().size());
+				System.out.println("Client timestamp: "+getTimeStamp()+" Granted Request queue size: "+this.getGrantRequestQueue().size());
 				while(this.getGrantRequestQueue().size() > 0)
 				{
+					increaseTimeStamp();
 					int grantedRequest = (int) this.getGrantRequestQueue().remove();
+					
+					increaseTimeStamp();
 					this.getRequestQueue().remove(grantedRequest);
+					
+					increaseTimeStamp();
 					try {
-						clientSocket = new Socket((this.getNodes().get(grantedRequest)[0]),Integer.parseInt(this.getNodes().get(grantedRequest)[1]));
+						 clientSocket = new Socket((this.getNodes().get(grantedRequest)[0]),Integer.parseInt(this.getNodes().get(grantedRequest)[1]));
 					} catch (NumberFormatException | IOException e1) {
 						// TODO Auto-generated catch block
 						e1.printStackTrace();
@@ -581,10 +548,7 @@ public class NodeDS {
 					//node.setRequestGranted(grantedRequest,true);
 					//sock = serverSock.accept();
 					//System.out.println("Send Reply.");
-					serverTimeStamp = this.getTimeStamp();
-					serverTimeStamp++;
-					this.setTimeStamp(serverTimeStamp);
-					System.out.println("Server timestamp: "+serverTimeStamp+" Request granted to server: "+grantedRequest);
+					System.out.println("Client timestamp: "+getTimeStamp()+" Request granted to server: "+grantedRequest);
 					PrintWriter writer = null;
 					try {
 						writer = new PrintWriter(clientSocket.getOutputStream());
@@ -592,17 +556,12 @@ public class NodeDS {
 						// TODO Auto-generated catch block
 						e.printStackTrace();
 					}
-					writer.println(serverTimeStamp+":"+this.getNodeId()+":granted");
-					writer.close();
-					serverTimeStamp = this.getTimeStamp();
-					serverTimeStamp++;
-					this.setTimeStamp(serverTimeStamp);
-					System.out.println("Server timestamp: "+serverTimeStamp);
-					serverTimeStamp = this.getTimeStamp();
-					serverTimeStamp++;
-					this.setTimeStamp(serverTimeStamp);
-					System.out.println("Server timestamp: "+serverTimeStamp);
-					
+					increaseTimeStamp();
+					writer.println(getTimeStamp()+":"+this.getNodeId()+":granted");
+					int mpr = this.getMessagesPerRound()[round];
+					mpr++;
+					this.setMessagesPerRound(round,mpr);
+					writer.close();					
 				}
 			}
 	   }
@@ -610,10 +569,9 @@ public class NodeDS {
 	
 	public void startClient()
 	{
-		int clientTimeStamp = this.getTimeStamp();
-		clientTimeStamp++;
-		this.setTimeStamp(clientTimeStamp);
-		System.out.println("Client timestamp: "+clientTimeStamp);
+		int clientTimeStampJ;
+		increaseTimeStamp();
+		System.out.println("Client timestamp: "+clientTimeStamp + "Client Started");
 		//int thisClientTs = clientTimeStamp;
 		int maxTs = -1;
 		int clientTs[] = new int[getMaxClientsCount()];
@@ -623,7 +581,7 @@ public class NodeDS {
 		{
 			for(int j = 0;j < getMaxClientsCount(); j++)
 			{
-				clientTs[j] = (clientTimeStamp);
+				clientTs[j] = (this.getTimeStamp());
 			}
 			if(getCSEntryCount() > 20 && this.getNodeId() % 2==0 )
     		{
@@ -642,18 +600,10 @@ public class NodeDS {
 				// TODO Auto-generated catch block
 				e.printStackTrace();
 			}
-			
-			//clientTimeStamp++;
-			//int reqTs = this.getTimeStamp();
-			/*synchronized(this)
-			{
-				getSortedRequestQueue().clear();
-				getSortedRequestQueue().putAll(getRequestQueue());
-			}*/
 			 boolean csEntered = false;
 			for(int j = 1;j < getMaxClientsCount(); j++)
 			{	
-				clientTimeStamp = clientTs[j]; 
+				clientTimeStampJ = clientTs[j]; 
 				int index= (j+(this.getNodeId()))%getMaxClientsCount();
 				if(!this.getRequestGranted(index))
 				{	
@@ -663,10 +613,7 @@ public class NodeDS {
 						//Create a client socket and connect to server at 127.0.0.1 port 5000
 						Socket clientSocket = new Socket(this.getNodes().get(index)[0],Integer.parseInt(this.getNodes().get(index)[1]));
 						System.out.println("Connecting to Server on host: "+this.getNodes().get(index)[0]+" port: "+Integer.parseInt(this.getNodes().get(index)[1]));
-						clientTimeStamp++;
-						if(this.getTimeStamp()<clientTimeStamp)
-							this.setTimeStamp(clientTimeStamp);
-						System.out.println("Client timestamp: "+clientTimeStamp+" Socket connected by client: "+this.getNodeId());
+						
 						PrintWriter writer = null;
 						try {
 							writer = new PrintWriter(clientSocket.getOutputStream());
@@ -675,18 +622,31 @@ public class NodeDS {
 							e.printStackTrace();
 						}
 						//
-						clientTimeStamp++;
-						if(this.getTimeStamp()<clientTimeStamp)
-						 this.setTimeStamp(clientTimeStamp);
-						//System.out.println("Client timestamp: "+clientTimeStamp+" Node "+index+" put in request queue of node "+this.getNodeId());
+						clientTimeStampJ++;
+						if(this.getTimeStamp()<clientTimeStampJ)
+						 this.setTimeStamp(clientTimeStampJ);
+						
 						if(!getRequestQueue().containsKey(this.getNodeId()))
-							 getRequestQueue().put(this.getNodeId(),clientTimeStamp);
-						writer.println(clientTimeStamp+":"+this.getNodeId()+":request");
+						{
+							getRequestQueue().put(this.getNodeId(),clientTimeStampJ);
+							System.out.println("Client timestamp: "+clientTimeStampJ+" Placing Node "+this.getNodeId()+" in it's own request queue");
+						}
+						
+						clientTimeStampJ++;
+						System.out.println("Client timestamp: "+clientTimeStampJ+" Node "+this.getNodeId()+" sending request to node "+index);
+						if(this.getTimeStamp()<clientTimeStampJ)
+						this.setTimeStamp(clientTimeStampJ);
+						//System.out.println("Client timestamp: cse count:"+cseCount);
+						startTime = System.nanoTime();
+						writer.println(clientTimeStampJ+":"+this.getNodeId()+":request:"+i);
+						int mpr = this.getMessagesPerRound()[i];
+						mpr++;
+						this.setMessagesPerRound(i,mpr);
+						clientTimeStampJ++;
+						if(this.getTimeStamp()<clientTimeStampJ)
+							this.setTimeStamp(clientTimeStampJ);
+						System.out.println("Client timestamp: "+clientTimeStampJ+" Node "+this.getNodeId()+" setRequestingCS: true");
 						this.setRequestingCS(true);
-						clientTimeStamp++;
-						if(this.getTimeStamp()<clientTimeStamp)
-							this.setTimeStamp(clientTimeStamp);
-						System.out.println("Client timestamp: "+clientTimeStamp+" Request sent from node "+this.getNodeId()+" to node "+index);
 						writer.close();
 					}
 					catch(IOException ex)
@@ -697,127 +657,66 @@ public class NodeDS {
 				}
 				else
 				{
+					//this.setRequestGranted(j,true);
+			    	//int clientTimeStamp = this.getTimeStamp();
+			    	clientTimeStampJ ++;
+			    	if(this.getTimeStamp()<clientTimeStampJ)
+				     this.setTimeStamp(clientTimeStampJ );
 					int granted = this.getGranted();
 					granted+=1;
 					this.setGranted(granted);
-					//this.setRequestGranted(j,true);
-			    	//int clientTimeStamp = this.getTimeStamp();
-			    	clientTimeStamp ++;
-			    	if(this.getTimeStamp()<clientTimeStamp)
-				     this.setTimeStamp(clientTimeStamp );
-				    System.out.println("Client timestamp: "+clientTimeStamp+" Nodes granting CS: "+this.getGranted()+" Max client count: "+(this.getMaxClientsCount()-1));
+				    System.out.println("Client timestamp: "+clientTimeStampJ+" Nodes granting CS: "+this.getGranted()+" Max client count: "+(this.getMaxClientsCount()-1));
 				    
 				}
-				clientTs[j] = (clientTimeStamp);
+				clientTs[j] = (clientTimeStampJ);
+				
 			}
 			while(true)
 			{
 				if(this.getGranted()==this.getMaxClientsCount()-1)
 				{
+					increaseTimeStamp();
+				    System.out.println("Client timestamp: "+this.getTimeStamp() +" setExecutingCS: true");
 					this.setExecutingCS(true);
+					
+					increaseTimeStamp();
+				    System.out.println("Client timestamp: "+this.getTimeStamp() +" Entering critical section");
 					this.enterCriticalSection();
+					endTime = System.nanoTime();
+					int mpr = this.getMessagesPerRound()[i];
+					mpr++;
+					this.setMessagesPerRound(i,mpr);
+					increaseTimeStamp();
+				    System.out.println("Client timestamp: "+this.getTimeStamp() +" setExecutingCS: false");
 					this.setExecutingCS(false);
-					clientTimeStamp = this.getTimeStamp();
-					clientTimeStamp++;
-				    System.out.println("Server timestamp: "+clientTimeStamp);
-				    if(this.getTimeStamp()<clientTimeStamp)
-				     this.setTimeStamp(clientTimeStamp);
+					
+					increaseTimeStamp();
+					System.out.println("Client timestamp: "+this.getTimeStamp()+" setGranted: 0");
 				    this.setGranted(0);
-				    clientTimeStamp = this.getTimeStamp();
-				    clientTimeStamp++;
-				    if(this.getTimeStamp()<clientTimeStamp)
-				     this.setTimeStamp(clientTimeStamp);
-				    System.out.println("Server timestamp: "+clientTimeStamp);
-				    System.out.println("Server timestamp: "+clientTimeStamp+" Request queue before removal: "+this.getRequestQueue());
+				    
+				    increaseTimeStamp();
+				    System.out.println("Server timestamp: "+this.getTimeStamp()+" Request queue before removal: "+this.getRequestQueue());
 				    this.getRequestQueue().remove(this.getNodeId());
 				    System.out.println("Element to be removed: "+this.getNodeId());
-					System.out.println("Server timestamp: "+clientTimeStamp+" Request queue after removal: "+this.getRequestQueue());
-					clientTimeStamp = this.getTimeStamp();
-					clientTimeStamp++;
-					if(this.getTimeStamp()<clientTimeStamp)
-				     this.setTimeStamp(clientTimeStamp);
-				    System.out.println("Server timestamp: "+clientTimeStamp+" Granting deffered requests");
+					System.out.println("Client timestamp: "+this.getTimeStamp()+" Request queue after removal: "+this.getRequestQueue());
+					
+					increaseTimeStamp();
+				    System.out.println("Client timestamp: "+this.getTimeStamp()+" Granting deffered requests");
 				    synchronized(this.getGRFLock())
 					{
-				    	this.grantRequests();
+				    	this.grantRequests(i);
 					}
 				    break;
-				    //csEntered = true;
-				}
+				    //csEntered = true;}
 			}
-			/*if(!csEntered)
-			{
-				while(true)
-				{
-					if(this.getEnterCS())
-					{
-						break;
-					}
-				}
-				this.enterCriticalSection();
-				this.setEnterCS(false);
-			}*/
-			/*for(int j = 1;j < getMaxClientsCount(); j++)
-			{	
-				clientTimeStamp = this.getTimeStamp(); 
-				int index= (j+(this.getNodeId()))%getMaxClientsCount();
-				if(!this.getRequestGranted(index))
-				{	
-					String message;
-					try
-					{
-						clientSocket = new Socket(this.getNodes().get(index)[0],Integer.parseInt(this.getNodes().get(index)[1]));
-						//Read messages from server. Input stream are in bytes. They are converted to characters by InputStreamReader
-						//Characters from the InputStreamReader are converted to buffered characters by BufferedReader
-						BufferedReader reader = new BufferedReader(new InputStreamReader(clientSocket.getInputStream()));
-						//The method readLine is blocked until a message is received 
-						message = reader.readLine();
-						clientTimeStamp++;
-						//if(this.getTimeStamp()<clientTimeStamp)
-						this.setTimeStamp(clientTimeStamp);
-						System.out.println("Client timestamp: "+clientTimeStamp+" Message read from server "+index+" to client "+this.getNodeId());
-						String messageParts[] = message.split(":");
-						System.out.println("Client timestamp: "+clientTimeStamp+" Server "+messageParts[1]+" says: " + message);
-						if(messageParts[2].equals("granted"))
-						{
-							granted++;
-							setRequestGranted(j,true);
-						}
-						clientTimeStamp = max(Integer.parseInt(messageParts[0]),clientTimeStamp);
-						//if(this.getTimeStamp()<clientTimeStamp)
-						this.setTimeStamp(clientTimeStamp);
-						System.out.println("Client timestamp: "+clientTimeStamp);
-						reader.close();
-						clientSocket.close();
-						//this.setRequestingCS(false);
-					
-					}
-					catch(IOException ex)
-					{
-						ex.printStackTrace();
-					}
-					//clientTs[j] = (clientTimeStamp);
-				}
-			}*/
-			/*for(int j = 0;j < getMaxClientsCount(); j++)
-			{
-				if(maxTs<clientTs[j])
-					maxTs = clientTs[j];
-			}
-			clientTimeStamp = maxTs;
-			if(this.getTimeStamp()<clientTimeStamp)*/
-			//this.setTimeStamp(clientTimeStamp);
-			/*if(granted==maxClientsCount-1)
-			{
-				this.setExecutingCS(true);
-				enterCriticalSection();
-				this.setExecutingCS(false);
-			}
-			clientTimeStamp++;
-			this.setTimeStamp(clientTimeStamp);*/
-			//System.out.println("Client timestamp: "+clientTimeStamp);
+		 }
+			this.getTimePerRound()[i]= ((endTime-startTime)/1e9);
 		}
-		//this.setTimeStamp(clientTimeStamp);
+		
+		System.out.println("Connecting to Server on host: "+this.getNodes().get(0)[0]+" port: "+Integer.parseInt(this.getNodes().get(0)[1]));
+		increaseTimeStamp();
+		System.out.println("Client timestamp: "+this.getTimeStamp()+" Socket connected by client: "+this.getNodeId());
+		
 		Socket clientSocket = null;
 		try {
 			clientSocket = new Socket(this.getNodes().get(0)[0],Integer.parseInt(this.getNodes().get(0)[1]));
@@ -825,11 +724,7 @@ public class NodeDS {
 			// TODO Auto-generated catch block
 			e1.printStackTrace();
 		}
-		System.out.println("Connecting to Server on host: "+this.getNodes().get(0)[0]+" port: "+Integer.parseInt(this.getNodes().get(0)[1]));
-		clientTimeStamp = this.getTimeStamp();
-		clientTimeStamp+=1;
-		this.setTimeStamp(clientTimeStamp);
-		System.out.println("Client timestamp: "+clientTimeStamp+" Socket connected by client: "+this.getNodeId());
+		
 		PrintWriter writer = null;
 		try {
 			writer = new PrintWriter(clientSocket.getOutputStream());
@@ -838,11 +733,37 @@ public class NodeDS {
 			e.printStackTrace();
 		}
 		//
-		System.out.println("Client timestamp: "+clientTimeStamp+" Node "+this.getNodeId()+" has finished computation");
-		writer.println(clientTimeStamp+":"+this.getNodeId()+":finishComputation");
-		clientTimeStamp++;
-		this.setTimeStamp(clientTimeStamp);
+		System.out.println("Client timestamp: "+this.getTimeStamp()+" Node "+this.getNodeId()+" has finished computation");
+		increaseTimeStamp();
+		int sum = 0;
+		int min= Integer.MAX_VALUE;
+		int max= Integer.MIN_VALUE;
+		for(int i=0;i<40;i++)
+		{
+			sum += getMessagesPerRound()[i];
+			if(min>getMessagesPerRound()[i])
+				min = getMessagesPerRound()[i];
+			if(max<getMessagesPerRound()[i])
+				max = getMessagesPerRound()[i];
+		}
+		
+		setTotalMessages(sum+1);
+		writer.println(this.getTimeStamp()+":"+this.getNodeId()+":finishComputation:"+getTotalMessages());
 		writer.close();
+		PrintWriter out = null;
+		try {
+			out = new PrintWriter(new BufferedWriter(new FileWriter("Statistics"+this.getNodeId()+".txt", true)));
+		} catch (IOException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+		out.println("Max messages: "+max+"and min messages: "+min+"\n");
+		for(int i=0;i<40;i++)
+		{
+			out.println("Round "+i+" Total Messages exchanged: "+getMessagesPerRound()[i]+"\n");
+			out.println("Round "+i+" Total Time taken: "+getTimePerRound()[i]+"\n");
+		}
+	    out.close();
 	}
 	
 	public static void main(String args[])
